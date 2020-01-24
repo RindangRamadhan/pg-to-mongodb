@@ -1,4 +1,4 @@
-# sql-to-mongodb
+# pg-to-mongodb
 
 A Node.js script to convert an SQL database to a MongoDB database.
 
@@ -14,7 +14,7 @@ Features
 
 First install dependencies:
 
-    npm install
+    npm install or yarn install
 
 ### Setup
 
@@ -27,8 +27,3 @@ Edit config.js. Add the connection string for your SQL database. Modify the Mong
 ### Wait
 
 It might take some time to replicate!
-
-## More!
-
-Find more like this in my new book [Data Wrangling with JavaScript](http://bit.ly/2t2cJu2)
-    
