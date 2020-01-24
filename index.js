@@ -1,9 +1,7 @@
 "use strict";
 
 const mongodb = require('mongodb');
-const sql = require('mssql');
 const E = require('linq');
-
 const config = require("./config.js");
 
 //
@@ -15,20 +13,20 @@ async function replicateTable (tableName, primaryKeyField, targetDb, sqlPool, co
 
     const collection = targetDb.collection(tableName);
     
-    const query = "select * from [" + tableName + "]";
+    const query = `SELECT * FROM "back_office"."${tableName}"`;
     console.log("Executing query: " + query);
-    const tableResult = await sqlPool.request().query(query);
+    const tableResult = await sqlPool.query(query);
 
-    console.log("Got " + tableResult.recordset.length + " records from table " + tableName);
+    console.log("Got " + tableResult.rows.length + " records from table " + tableName);
 
-    if (tableResult.recordset.length === 0) {
+    if (tableResult.rows.length === 0) {
         console.log('No records to transfer.');
         return;
     }
 
     const primaryKeyRemap = [];
 
-    const bulkRecordInsert = E.from(tableResult.recordset)
+    const bulkRecordInsert = E.from(tableResult.rows)
         .select(row => {
             if (config.remapKeys) {
                 row._id = new mongodb.ObjectID(); // Allocate a new MongoDB id.
@@ -42,11 +40,28 @@ async function replicateTable (tableName, primaryKeyField, targetDb, sqlPool, co
             }
             delete row[primaryKeyField];    
 
-            return {
-                insertOne: {
-                    document: row
-                },
-            }            
+            if(tableName == 'account') {
+                const newRow = {
+                    _id: new mongodb.ObjectID(),
+                    name: row.name,
+                    email: row.email,
+                    password: row.password,
+                    role: row.role_id
+                }
+
+                return {
+                    insertOne: {
+                        document: newRow
+                    },
+                }   
+
+            } else  {
+                return {
+                    insertOne: {
+                        document: row
+                    },
+                }   
+            }         
         })
         .toArray();
 
@@ -119,25 +134,24 @@ async function main () {
     const mongoClient = await mongodb.MongoClient.connect(config.mongoConnectionString);
     const targetDb = mongoClient.db(config.targetDatabaseName);
     
-    const sqlPool = await sql.connect(config.sqlConnectionString);
+    const sqlPool = config.postgresConnetion
 
-    const primaryKeysQuery = "SELECT A.TABLE_NAME, A.CONSTRAINT_NAME, B.COLUMN_NAME\n" +
-        "FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS A, INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE B\n" +
-        "WHERE CONSTRAINT_TYPE = 'PRIMARY KEY' AND A.CONSTRAINT_NAME = B.CONSTRAINT_NAME\n" +
-        "ORDER BY A.TABLE_NAME";
-    const primaryKeysResult = await sqlPool.request().query(primaryKeysQuery);
-    const primaryKeyMap = E.from(primaryKeysResult.recordset)
+    const primaryKeysQuery = `SELECT A.TABLE_NAME, A.CONSTRAINT_NAME, B.COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS A, INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE B 
+        WHERE CONSTRAINT_TYPE = 'PRIMARY KEY' AND A.CONSTRAINT_NAME = B.CONSTRAINT_NAME ORDER BY A.TABLE_NAME`;
+    const primaryKeysResult = await sqlPool.query(primaryKeysQuery);
+    const primaryKeyMap = E.from(primaryKeysResult.rows)
         .toObject(
-            row => row.TABLE_NAME,
-            row => row.COLUMN_NAME
+            row => row.table_name,
+            row => row.column_name
         );
 
     const primaryKeysCollection = targetDb.collection("primaryKeys");
-    await primaryKeysCollection.insertMany(primaryKeysResult.recordset);
+    await primaryKeysCollection.insertMany(primaryKeysResult.rows);
 
-    const tablesResult = await sqlPool.request().query(`SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE'`);
-    const tableNames = E.from(tablesResult.recordset)
-        .select(row => row.TABLE_NAME)
+    const tablesResult = await sqlPool.query(`SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' AND table_schema = 'back_office'`);
+    const tableNames = E.from(tablesResult.rows)
+        .select(row => row.table_name)
         .where(tableName => config.skip.indexOf(tableName) === -1)
         .distinct()
         .toArray();
@@ -161,8 +175,8 @@ async function main () {
             "INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE i2 ON i1.CONSTRAINT_NAME = i2.CONSTRAINT_NAME\n" +
             "WHERE i1.CONSTRAINT_TYPE = 'PRIMARY KEY'\n" +
             ") PT ON PT.TABLE_NAME = PK.TABLE_NAME";
-        const foreignKeysResult = await sqlPool.request().query(foreignKeysQuery);
-        const foreignKeyMap = E.from(foreignKeysResult.recordset)
+        const foreignKeysResult = await sqlPool.query(foreignKeysQuery);
+        const foreignKeyMap = E.from(foreignKeysResult.rows)
             .groupBy(row => row.K_Table)
             .select(group => {
                 return {
@@ -183,14 +197,14 @@ async function main () {
             );
 
         const foreignKeysCollection = targetDb.collection("foreignKeys");
-        await foreignKeysCollection.insertMany(foreignKeysResult.recordset);        
+        await foreignKeysCollection.insertMany(foreignKeysResult.rows);        
 
         for (const tableName of tableNames) {
             await remapForeignKeys(tableName, foreignKeyMap[tableName], targetDb, sqlPool);
         }
     }
 
-    await sqlPool.close();
+    await sqlPool.end();
     await mongoClient.close();
 }
 

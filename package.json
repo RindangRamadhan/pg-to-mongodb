@@ -7,7 +7,8 @@
     "linq": "^3.0.9",
     "moment": "^2.20.1",
     "mongodb": "^3.0.2",
-    "mssql": "^4.1.0"
+    "mssql": "^4.1.0",
+    "pg": "^7.17.1"
   },
   "devDependencies": {},
   "scripts": {
